@@ -7,6 +7,16 @@ from torch import nn
 from torchvision import transforms
 import torch.nn.functional as F
 import numpy as np
+import pdb
+from dataset import PelvisXRayDataset
+import pandas as pd
+from sklearn.model_selection import train_test_split
+import sys
+
+# Import Perphix's transforms
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
+from perphix.src.perphix import augment
+
 
 # HF imports
 import diffusers
@@ -40,6 +50,9 @@ def main(
     eval_blank_mask=False,
     eval_sample_size=1000
 ):
+    print(torch.cuda.memory_summary())
+    torch.cuda.empty_cache()
+
     #GPUs
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print('running on {}'.format(device))
@@ -83,8 +96,9 @@ def main(
         load_images_as_np_arrays = True
         print("image channels not 1 or 3, attempting to load images as np arrays...")
 
+
     if config.segmentation_guided:
-        seg_types = os.listdir(seg_dir)
+        seg_types = os.listdir(seg_dir) # ['all']
         seg_paths_train = {} 
         seg_paths_eval = {}
 
@@ -92,9 +106,9 @@ def main(
         if img_dir is not None: 
             # make sure the images are matched to the segmentation masks
             img_dir_train = os.path.join(img_dir, "train")
-            img_paths_train = [os.path.join(img_dir_train, f) for f in os.listdir(img_dir_train)]
+            img_paths_train = [os.path.join(img_dir_train, f) for f in os.listdir(img_dir_train)] #all img paths
             for seg_type in seg_types:
-                seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(img_dir_train)]
+                seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(img_dir_train)] #all seg paths in MASK_FOLDER/all/train/...
         else:
             for seg_type in seg_types:
                 seg_paths_train[seg_type] = [os.path.join(seg_dir, seg_type, "train", f) for f in os.listdir(os.path.join(seg_dir, seg_type, "train"))]
@@ -104,7 +118,7 @@ def main(
             img_dir_eval = os.path.join(img_dir, evalset_name)
             img_paths_eval = [os.path.join(img_dir_eval, f) for f in os.listdir(img_dir_eval)]
             for seg_type in seg_types:
-                seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(img_dir_eval)]
+                seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(img_dir_eval)] #all seg paths in MASK_FOLDER/all/val/...
         else:
             for seg_type in seg_types:
                 seg_paths_eval[seg_type] = [os.path.join(seg_dir, seg_type, evalset_name, f) for f in os.listdir(os.path.join(seg_dir, seg_type, evalset_name))]
@@ -113,7 +127,7 @@ def main(
             dset_dict_train = {
                     **{"image": img_paths_train},
                     **{"seg_{}".format(seg_type): seg_paths_train[seg_type] for seg_type in seg_types}
-                }
+                } #contains path names for images and segmentations
             
             dset_dict_eval = {
                     **{"image": img_paths_eval},
@@ -138,20 +152,40 @@ def main(
             dset_dict_train["image_filename"] = [os.path.basename(f) for f in dset_dict_train["seg_{}".format(seg_types[0])]]
             dset_dict_eval["image_filename"] = [os.path.basename(f) for f in dset_dict_eval["seg_{}".format(seg_types[0])]]
 
-        dataset_train = datasets.Dataset.from_dict(dset_dict_train)
-        dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
+        #dset_dict_train is strucutred as a dictionary with first element a list of DATA_FOLDER/train train directories
+        #second element is MASK_FOLDER/all/train directories
+        # third element is list of [number].png names
+
+        # TODO: Shuffle and split landmark_dir into two .csv files for train and eval datasets
+        #split_landmark_dir(input_csv="landmark_dir.csv", train_csv="train_landmark_dir.csv", eval_csv="eval_landmark_dir.csv")
+
+        # transform for data augmentation
+        transform = augment.build_augmentation(use_keypoint=True, is_train=True, image_only=False)
+
+        #pdb.set_trace()
+        arrow_table = datasets.Dataset.from_dict(dset_dict_train).data
+        dataset_train = PelvisXRayDataset(arrow_table, "landmarks.csv", transform)
+        dataset_train = dataset_train.with_format("numpy")
+        #dataset_eval = PelvisXRayDataset(img_dir, "eval_landmark_dir.csv")
+        #dataset_train = datasets.Dataset.from_dict(dset_dict_train)
+        arrow_table_eval = datasets.Dataset.from_dict(dset_dict_eval).data
+        dataset_eval = PelvisXRayDataset(arrow_table_eval, "landmarks.csv", transform)
+        #dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
+        dataset_eval = dataset_eval.with_format("numpy")
 
         # load the images
-        if not load_images_as_np_arrays and img_dir is not None:
-            dataset_train = dataset_train.cast_column("image", datasets.Image())
-            dataset_eval = dataset_eval.cast_column("image", datasets.Image())
+        #if not load_images_as_np_arrays and img_dir is not None:
+        #dataset_train = dataset_train.cast_column("image", datasets.Image()) #turns file names into PIL images
+        #dataset_eval = dataset_eval.cast_column("image", datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+        #for seg_type in seg_types:
+        #    dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
 
+        #for seg_type in seg_types:
+        #    dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+
+    '''
     else:
         if img_dir is not None:
             img_dir_train = os.path.join(img_dir, "train")
@@ -179,21 +213,20 @@ def main(
             if not load_images_as_np_arrays:
                 dataset_train = dataset_train.cast_column("image", datasets.Image())
                 dataset_eval = dataset_eval.cast_column("image", datasets.Image())
-
+    '''
     # training set preprocessing
     if not load_images_as_np_arrays:
-        preprocess = transforms.Compose(
+        preprocess = transforms.Compose( #Preprocess is messing up the 0-14 of landmarks? 
             [
                 transforms.Resize((config.image_size, config.image_size)),
                 # transforms.RandomHorizontalFlip(), # flipping wouldn't result in realistic images
                 transforms.ToTensor(),
-                transforms.Normalize(
+                transforms.Normalize( #Normalizes images to be -1 to 1 
                     num_img_channels * [0.5], 
                     num_img_channels * [0.5]),
             ]
         )
     else:
-        # resizing will be done in the transform function
         preprocess = transforms.Compose(
             [
                 transforms.Normalize(
@@ -287,11 +320,10 @@ def main(
             in_channels += 1
         elif config.segmentation_channel_mode == "multi":
             in_channels = len(seg_types) + in_channels
-
     model = diffusers.UNet2DModel(
         sample_size=config.image_size,  # the target image resolution
         in_channels=in_channels,  # the number of input channels, 3 for RGB images
-        out_channels=num_img_channels,  # the number of output channels
+        out_channels=num_img_channels,  # the number of output channels. Add 14 to get landmark heatmaps
         layers_per_block=2,  # how many ResNet layers to use per UNet block
         block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channes for each UNet block
         down_block_types=(
@@ -317,7 +349,7 @@ def main(
             print("resuming from model at training epoch {}".format(resume_epoch))
         elif "eval" in mode:
             print("loading saved model...")
-        model = model.from_pretrained(os.path.join(config.output_dir, 'unet'), use_safetensors=True)
+        model = model.from_pretrained(os.path.join(config.output_dir, 'unet'), use_safetensors=True) #Causing error
 
     model = nn.DataParallel(model)
     model.to(device)

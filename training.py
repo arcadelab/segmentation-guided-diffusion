@@ -8,7 +8,9 @@ from pathlib import Path
 from tqdm.auto import tqdm
 import numpy as np
 from datetime import timedelta
+import matplotlib.pyplot as plt
 
+import pdb
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -26,9 +28,9 @@ class TrainingConfig:
     eval_batch_size: int = 8  # how many images to sample during evaluation
     num_epochs: int = 200
     gradient_accumulation_steps: int = 1
-    learning_rate: float = 1e-4
+    learning_rate: float = 2e-5
     lr_warmup_steps: int = 500
-    save_image_epochs: int = 20
+    save_image_epochs: int = 1
     save_model_epochs: int = 30
     mixed_precision: str = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     output_dir: str = None
@@ -62,6 +64,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
     # There is no specific order to remember, you just need to unpack the
     # objects in the same order you gave them to the prepare method.
 
+
     global_step = 0
 
     # logging
@@ -78,15 +81,29 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
     if config.resume_epoch is not None:
         start_epoch = config.resume_epoch
 
-    for epoch in range(start_epoch, config.num_epochs):
+    for epoch in range(start_epoch, config.num_epochs): 
         progress_bar = tqdm(total=len(train_dataloader))
         progress_bar.set_description(f"Epoch {epoch}")
 
         model.train()
+        for step, batch in enumerate(train_dataloader): # TRAIN LOOP (I OVERRIDE DATALOADER SO THIS AUGMENTS DURING GET ITEM)
+            #batch['seg_all'] contains (0, 14) using my dataset, but is (0, 0.01568628, ...0.05490196) using their dataset
+            #batch['images'] is (-1, 1) using my dataset
 
-        for step, batch in enumerate(train_dataloader):
-            clean_images = batch['images']
+            #pdb.set_trace()
+
+            # clean_images range is (0, 1) for x-ray images
+            # clean_images range is (0, some number * e^negative )
+            clean_images = batch['images'] #shape should be (3, 1, 384, 384)
             clean_images = clean_images.to(device)
+            pdb.set_trace()
+            print(f"clean_images: {clean_images.shape}, {clean_images.min()}, {clean_images.max()}")
+
+            #plt.imshow(18*batch['seg_all'][0][0], cmap="gray")
+            #plt.savefig("landmark visualization")
+
+            #plt.imshow(batch['images'][0][0], cmap="gray")
+            #plt.savefig("batch['images'] visualization")
 
             # Sample noise to add to the images
             noise = torch.randn(clean_images.shape).to(clean_images.device)
@@ -95,13 +112,24 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
             # Sample a random timestep for each image
             timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bs,), device=clean_images.device).long()
 
+
             # Add noise to the clean images according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
             noisy_images = noise_scheduler.add_noise(clean_images, noise, timesteps)
 
+            #plt.imshow(noisy_images[0][0].cpu(), cmap="gray")
+            #plt.savefig("noisy_images visualization after adding noise")
+
+
             if config.segmentation_guided:
                 noisy_images = add_segmentations_to_noise(noisy_images, batch, config, device)
 
+            # noisy_images is of shape (3, 2, 384, 384) - now (3, 18, 384, 384)
+            #plt.imshow(noisy_images[0][0].cpu(), cmap="gray")
+            #plt.savefig("noisy_images visualization after adding segmentation")
+            #plt.imshow(noisy_images[0][1].cpu(), cmap="gray")
+            #plt.savefig("noisy_images segmentation visualization")
+                
             # Predict the noise residual
             if config.class_conditional:
                 class_labels = torch.ones(noisy_images.size(0)).long().to(device)
@@ -111,8 +139,20 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
                     class_labels = torch.zeros_like(class_labels).long()
                 noise_pred = model(noisy_images, timesteps, class_labels=class_labels, return_dict=False)[0]
             else:
-                noise_pred = model(noisy_images, timesteps, return_dict=False)[0]
+                #pdb.set_trace()
+                # noise_images is of shape (3, 2, 384, 384), but noise_pred is (3, 1, 384, 384)
+                noise_pred = model(noisy_images, timesteps, return_dict=False)[0] # shape is (3, 1, 384, 384)
+                #plt.imshow(noise_pred[0][0].detach().cpu().numpy(), cmap="gray")
+                #plt.savefig("noise_pred visualization")
+            #pdb.set_trace()
             loss = F.mse_loss(noise_pred, noise)
+            #noise_pred_log_prob = F.log_softmax(noise_pred[:, 3:, :, :], dim=1)
+            #noise_prob = F.softmax(noise[:, 3:, :, :], dim=1)
+
+
+            #heatmap_loss = F.mse_loss(noise_pred[:, 3:, :, :], noise[:, 3:, :, :])
+
+            #loss = img_loss + heatmap_loss
             loss.backward()
 
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -123,7 +163,7 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
             # also train on target domain images if conditional
             # (we don't have masks for this domain, so we can't do segmentation-guided; just use blank masks)
             if config.class_conditional:
-                target_domain_images = batch['images_target']
+                target_domain_images = batch['images_target'] #batch['images_target'] is MASK_FOLDER
                 target_domain_images = target_domain_images.to(device)
 
                 # Sample noise to add to the images
