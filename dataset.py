@@ -135,58 +135,17 @@ class PelvisXRayDataset(datasets.Dataset):
         return len(self.arrow_table)
 
     def __getitem__(self, idx):
+        #pdb.set_trace()
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        data_folder = 'DATA_FOLDER/train'
-        mask_folder = 'MASK_FOLDER/all/train'
-
-        # idx is [127, 187, 138]
-        data_files = os.listdir(data_folder)
-        mask_files = os.listdir(mask_folder)
-
-        #batch = super().__getitem__(idx) 
-        batch = {}
-        # X-ray images are (0, 1)
-        images_list = [np.expand_dims(np.load(os.path.join(data_folder, data_files[i]))[0,:,:], axis=0) for i in idx]
-        seg_all_list = [np.expand_dims(np.load(os.path.join(mask_folder, data_files[i]))[0,:,:], axis=0) for i in idx]
-        image_filenames_list = [data_files[i] for i in idx]
-        #images_list = [np.load('DATA_FOLDER/train/{}.npy'.format(idx[0])), np.load('DATA_FOLDER/train/{}.npy'.format(idx[1])), np.load('DATA_FOLDER/train/{}.npy'.format(idx[2]))]
-        #seg_all_list = [np.load('MASK_FOLDER/all/train/{}.npy'.format(idx[0])), np.load('MASK_FOLDER/all/train/{}.npy'.format(idx[1])), np.load('MASK_FOLDER/all/train/{}.npy'.format(idx[2]))]
-        #image_filenames_list = ['{}.npy'.format(idx[0]), '{}.npy'.format(idx[1]), '{}.npy'.format(idx[2])]
-
-        batch['images'] = images_list
-        batch['seg_all'] = seg_all_list
-        batch['image_filenames'] = image_filenames_list
-
-        '''
-        if self.transform:
-            for i in range(len(batch['image_filenames'])):
-                #original_filename = os.path.join(output_dir, f"original_image_{i}.png")
-                #save_image_with_landmarks(batch['images'][i].squeeze(0), landmarks[i], original_filename)
-                
-                np_img = np.stack([np.array(batch['images'][i]).squeeze(0)] * 3, axis=-1) # reshape image to (384, 384, 3)
-                #np_img = np.array(batch['images'][i])
-                np_img = (((np_img + 1)/2)*255).astype(np.uint8) # Normalize to (0, 225)
-
-                transformed = self.transform(image=np_img)
-                transformed_image = transformed['image']
-                
-
-                # Reshape transformed_image from (384, 384, 3) to (1, 384, 384) 
-                transformed_image = np.asarray(transformed_image)[:, :, 0]                
-                # Reshape to (1, 384, 384)
-                transformed_image = transformed_image[np.newaxis, :, :]
-
-                #Update transformed_batch
-                batch['images'][i] = transformed_image
-
-
+        batch = super().__getitem__(idx) 
         #batch is a dictionary with ['images'] containing a list of 3 (1, 384, 384) images
         # and with ['seg_all'] containing 3 (1, 384, 384) landmark locations 
         # Potential error?: landmark (1, 384, 384) tensor is rescaled to have values ranging from 0 to 0.0549
         # and with ['image_filenames'] containing 3 file names
 
+        '''
         landmarks = []
         for image_filename in batch['image_filenames']:
             idx = int(image_filename.split(".")[0])
@@ -194,12 +153,14 @@ class PelvisXRayDataset(datasets.Dataset):
                 list([self.landmarks_df.iloc[idx, 1 + i], self.landmarks_df.iloc[idx, 1 + i + 1]]
                 for i in range(0, 28, 2))
             )
+        '''
 
 
         #transformed_batch = copy.deepcopy(batch) #This is inefficient and for debugging (optimize later)
         #output_dir = "debug_images"
         #os.makedirs(output_dir, exist_ok=True)  # Create output directory if not exists
         
+        '''
         if self.transform:
             for i in range(len(batch['image_filenames'])):
                 #original_filename = os.path.join(output_dir, f"original_image_{i}.png")
@@ -238,9 +199,9 @@ class PelvisXRayDataset(datasets.Dataset):
         
         # When returning, np_img should be shape (1, 384, 384) and 
         '''
-        #pdb.set_trace()
+
         return {
             'images':batch['images'],
-            'seg_all':batch['seg_all'], 
+            'seg_all':batch['seg_all'], # Seg_all is None
             'image_filenames':batch['image_filenames']
         }

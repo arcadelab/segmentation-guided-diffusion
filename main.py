@@ -27,6 +27,35 @@ import datasets
 from training import TrainingConfig, train_loop
 from eval import evaluate_generation, evaluate_sample_many
 
+def split_landmark_dir(input_csv, train_csv, eval_csv):
+    """
+    Shuffle and split the landmark_dir dataset into train and eval CSV files.
+
+    Args:
+        input_csv (str): Path to the input landmark_dir CSV file.
+        train_csv (str): Path to save the train CSV file.
+        eval_csv (str): Path to save the eval CSV file.
+        train_ratio (float): Proportion of the data for training (default is 0.85).
+        random_seed (int): Seed for reproducibility (default is 42).
+
+    Returns:
+        None
+    """
+    train_ratio = 0.85
+    random_seed = 42
+    # Load the dataset
+    df = pd.read_csv(input_csv)
+
+    # Shuffle and split the dataset
+    train_df, eval_df = train_test_split(
+        df, test_size=1 - train_ratio, random_state=random_seed, shuffle=True
+    )
+
+    # Save the train and eval datasets
+    train_df.to_csv(train_csv, index=False)
+    eval_df.to_csv(eval_csv, index=False)
+
+
 def main(
     mode,
     img_size,
@@ -162,28 +191,23 @@ def main(
         # transform for data augmentation
         transform = augment.build_augmentation(use_keypoint=True, is_train=True, image_only=False)
 
-        #pdb.set_trace()
+
         arrow_table = datasets.Dataset.from_dict(dset_dict_train).data
         dataset_train = PelvisXRayDataset(arrow_table, "landmarks.csv", transform)
-        dataset_train = dataset_train.with_format("numpy")
         #dataset_eval = PelvisXRayDataset(img_dir, "eval_landmark_dir.csv")
         #dataset_train = datasets.Dataset.from_dict(dset_dict_train)
-        arrow_table_eval = datasets.Dataset.from_dict(dset_dict_eval).data
-        dataset_eval = PelvisXRayDataset(arrow_table_eval, "landmarks.csv", transform)
-        #dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
-        dataset_eval = dataset_eval.with_format("numpy")
+        dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
 
         # load the images
-        #if not load_images_as_np_arrays and img_dir is not None:
-        #dataset_train = dataset_train.cast_column("image", datasets.Image()) #turns file names into PIL images
-        #dataset_eval = dataset_eval.cast_column("image", datasets.Image())
+        if not load_images_as_np_arrays and img_dir is not None:
+            dataset_train = dataset_train.cast_column("image", datasets.Image()) #turns file names into PIL images
+            dataset_eval = dataset_eval.cast_column("image", datasets.Image())
 
+        for seg_type in seg_types:
+            dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
 
-        #for seg_type in seg_types:
-        #    dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
-
-        #for seg_type in seg_types:
-        #    dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+        for seg_type in seg_types:
+            dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
 
     '''
     else:
@@ -320,6 +344,7 @@ def main(
             in_channels += 1
         elif config.segmentation_channel_mode == "multi":
             in_channels = len(seg_types) + in_channels
+    #pdb.set_trace()
     model = diffusers.UNet2DModel(
         sample_size=config.image_size,  # the target image resolution
         in_channels=in_channels,  # the number of input channels, 3 for RGB images

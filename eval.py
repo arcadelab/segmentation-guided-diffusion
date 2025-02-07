@@ -15,7 +15,6 @@ from diffusers import DiffusionPipeline, ImagePipelineOutput, DDIMScheduler
 from diffusers.utils.torch_utils import randn_tensor 
 
 from utils import make_grid
-from visualize_np import save_image_grid_with_heatmaps
 from torchvision.utils import save_image
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
@@ -382,34 +381,21 @@ def evaluate(config, epoch, pipeline, seg_batch=None, class_label_cfg=None, tran
             class_label_cfg=class_label_cfg,
             translate=translate
         ).images
-        '''
-        images = pipeline(
-            batch_size = config.eval_batch_size,
-            seg_batch=seg_batch,
-            class_label_cfg=class_label_cfg,
-            translate=translate
-        )
-        '''
     else:
         images = pipeline(
             batch_size = config.eval_batch_size,
             # TODO: implement CFG and naive conditioning sampling for non-seg-guided pipelines (also needed for translation)
         ).images
 
-    #images = images.cpu().numpy()
-    #save_image_grid_with_heatmaps(images, "./output", epoch, config, seg_batch)
-
     # Make a grid out of the images
     cols = 4
     rows = math.ceil(len(images) / cols)
-    #pdb.set_trace()
     image_grid = make_grid(images, rows=rows, cols=cols)
 
     # Save the images
     test_dir = os.path.join(config.output_dir, "samples")
     os.makedirs(test_dir, exist_ok=True)
     image_grid.save(f"{test_dir}/{epoch:04d}.png")
-    
 
     # save segmentations we conditioned the samples on
     if config.segmentation_guided:
@@ -418,7 +404,7 @@ def evaluate(config, epoch, pipeline, seg_batch=None, class_label_cfg=None, tran
                 save_image(seg_batch[seg_type], f"{test_dir}/{epoch:04d}_cond_{seg_type}.png", normalize=True, nrow=cols)
 
         # as well as original images that the segs belong to
-        img_og = seg_batch['images'][:, 0:3, :, :]
+        img_og = seg_batch['images']
         save_image(img_og, f"{test_dir}/{epoch:04d}_orig.png", normalize=True, nrow=cols)
 
 
@@ -719,7 +705,7 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
                 If `return_dict` is `True`, [`~pipelines.ImagePipelineOutput`] is returned, otherwise a `tuple` is
                 returned where the first element is a list with the generated images
         """
-        pdb.set_trace()
+
         # Sample gaussian noise to begin loop
         if self.external_config.segmentation_channel_mode == "single":
             img_channel_ct = self.unet.config.in_channels - 1
@@ -757,7 +743,6 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
         if not translate:
             # normal sampling; start from noise
             image = randn_tensor(image_shape, generator=generator, device=self._execution_device, dtype=self.unet.dtype)
-            # Shape is (2, 1, 384, 384) around -4.5 to 4.1
         else:
             # image translation sampling; start from source domain images, add noise up to certain step, then being there for denoising
             trans_start_t = int(self.external_config.trans_noise_level * self.scheduler.config.num_train_timesteps)
@@ -777,7 +762,6 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
         self.scheduler.set_timesteps(num_inference_steps)
 
         for t in self.progress_bar(self.scheduler.timesteps):
-            #pdb.set_trace()
             if translate:
                 # if doing translation, start at chosen time step given partially-noised image
                 # skip all earlier time steps (with higher t)
@@ -787,7 +771,6 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
             # 1. predict noise model_output
             # first, concat segmentations to noise
             image = add_segmentations_to_noise(image, seg_batch, self.external_config, self.device)
-            # shape is (2, 2, 384, 384)
 
             if self.external_config.class_conditional:
                 if class_label_cfg is not None:
@@ -815,9 +798,7 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
                         class_labels = torch.ones(image.size(0)).long().to(self.device)
                         model_output = self.unet(image, t, class_labels=class_labels).sample
             else:
-                model_output = self.unet(image, t).sample # model_output has shape (2, 1, 384, 384)
-                plt.imshow(model_output[0][0].cpu(), cmap="gray")
-                plt.savefig("model_output")
+                model_output = self.unet(image, t).sample
 
             # 2. predict previous mean of image x_t-1 and add variance depending on eta
             # eta corresponds to η in paper and should be between [0, 1]
@@ -825,15 +806,9 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
             # but first, we're only adding denoising the image channel (not seg channel),
             # so remove segs
             image = image[:, :img_channel_ct, :, :]
-            # image.shape is (2, 1, 384, 384)
-
             image = self.scheduler.step(
                 model_output, t, image, eta=eta, use_clipped_model_output=use_clipped_model_output, generator=generator
             ).prev_sample
-
-            plt.imshow(image[0][0].cpu(), cmap="gray")
-            plt.savefig("image after scheduler step")
-            
 
         # if training conditionally, also evaluate for target domain images
         # if not using chosen class for CFG
@@ -870,10 +845,6 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
             # will output source domain images first, then target domain images
 
         image = (image / 2 + 0.5).clamp(0, 1)
-        #pdb.set_trace()
-        #image = image[:, 0, :, :]
-        #return image
-    
         image = image.cpu().permute(0, 2, 3, 1).numpy()
         if output_type == "pil":
             image = self.numpy_to_pil(image)
