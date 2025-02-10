@@ -193,21 +193,23 @@ def main(
 
 
         arrow_table = datasets.Dataset.from_dict(dset_dict_train).data
-        dataset_train = PelvisXRayDataset(arrow_table, "landmarks.csv", transform)
+        dataset_train = PelvisXRayDataset(arrow_table, "landmarks.csv", transform, train=True)
         #dataset_eval = PelvisXRayDataset(img_dir, "eval_landmark_dir.csv")
         #dataset_train = datasets.Dataset.from_dict(dset_dict_train)
-        dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
+        #dataset_eval = datasets.Dataset.from_dict(dset_dict_eval)
+        arrow_table_eval = datasets.Dataset.from_dict(dset_dict_eval).data
+        dataset_eval = PelvisXRayDataset(arrow_table_eval, "landmarks.csv", transform, train=False)
 
         # load the images
-        if not load_images_as_np_arrays and img_dir is not None:
-            dataset_train = dataset_train.cast_column("image", datasets.Image()) #turns file names into PIL images
-            dataset_eval = dataset_eval.cast_column("image", datasets.Image())
+        #if not load_images_as_np_arrays and img_dir is not None:
+        #    dataset_train = dataset_train.cast_column("image", datasets.Image()) #turns file names into PIL images
+        #    dataset_eval = dataset_eval.cast_column("image", datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
+        #for seg_type in seg_types:
+        #    dataset_train = dataset_train.cast_column("seg_{}".format(seg_type), datasets.Image())
 
-        for seg_type in seg_types:
-            dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
+        #for seg_type in seg_types:
+        #    dataset_eval = dataset_eval.cast_column("seg_{}".format(seg_type), datasets.Image())
 
     '''
     else:

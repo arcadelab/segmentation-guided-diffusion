@@ -80,7 +80,8 @@ def evaluate_sample_many(
                     img_fname = "{}/condon_{}".format(sample_dir, seg_batch["image_filenames"][i])
                 else:
                     img_fname = f"{sample_dir}/{num_sampled + i:04d}.png"
-                img.save(img_fname)
+                #pdb.set_trace()
+                img.save(img_fname[0:-4] + '.png') #modified this for the 3 channel toy landmark case
 
             num_sampled += len(images)
             print("sampled {}/{}.".format(num_sampled, sample_size))

@@ -29,7 +29,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     learning_rate: float = 2e-5
     lr_warmup_steps: int = 500
-    save_image_epochs: int = 20
+    save_image_epochs: int = 35
     save_model_epochs: int = 30
     mixed_precision: str = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     output_dir: str = None
@@ -90,10 +90,11 @@ def train_loop(config, model, noise_scheduler, optimizer, train_dataloader, eval
             #pdb.set_trace() 
             #batch['seg_all'] contains (0, 14) using my dataset, but is (0, 0.01568628, ...0.05490196) using their dataset
             #batch['images'] is (-1, 1) using my dataset
+            # batch['images'] is a Tensor of size [3, 1, 384, 384]
 
 
 
-            clean_images = batch['images'] #shape is (3, 384, 384, 3), but should be (3, 1, 384, 384)
+            clean_images = batch['images'] #shape is [3, 1, 384, 384]
             clean_images = clean_images.to(device)
 
             # Sample noise to add to the images
