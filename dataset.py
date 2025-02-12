@@ -98,10 +98,7 @@ class PelvisXRayDataset(datasets.Dataset):
         seg_all_list = []
         image_filenames_list = []
         for i in idx:
-            #pdb.set_trace()
-            print(idx)
-            print(data_files[i])
-            np_data = np.load(os.path.join(data_folder, data_files[i]))[[0, 7, 13], :, :]
+            np_data = np.load(os.path.join(data_folder, data_files[i]))[[0, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], :, :]
             for j in range(np_data.shape[0]):
                 np_data[j] = scale_to_range_neg1_to_1(np_data[j])
                 #pdb.set_trace()

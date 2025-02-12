@@ -9,6 +9,7 @@ from tqdm import tqdm
 from copy import deepcopy
 import numpy as np
 import pdb
+from PIL import Image, ImageDraw
 
 import diffusers
 from diffusers import DiffusionPipeline, ImagePipelineOutput, DDIMScheduler
@@ -22,6 +23,77 @@ from matplotlib.colors import ListedColormap
 ####################
 # segmentation-guided DDPM
 ####################
+def analyze_heatmap(heatmap, threshold=0.5):
+    """
+    Analyze the confidence of a heatmap.
+    
+    Args:
+        heatmap (np.ndarray): A 2D array representing the heatmap.
+        threshold (float): Threshold to consider a strong presence.
+
+    Returns:
+        dict: Metrics indicating certainty and presence of the landmark.
+    """
+    max_value = heatmap.max()
+    entropy = -np.sum(
+        (heatmap / heatmap.sum() + 1e-10) * np.log(heatmap / heatmap.sum() + 1e-10)
+    )
+    mae_to_zero = np.mean(np.abs(heatmap))
+    peak_to_background = max_value / (np.mean(heatmap[heatmap < max_value]) + 1e-10)
+
+    return {
+        "max_value": max_value,
+        "entropy": entropy,
+        "mae_to_zero": mae_to_zero,
+        "peak_to_background": peak_to_background,
+        "is_present": max_value > threshold,
+    }
+
+def visualize_landmarks(img_tensor, output_path, threshold=0.5):
+    """
+    Visualize an image and overlay landmark predictions.
+    
+    Args:
+        img_tensor (torch.Tensor or np.ndarray): Input tensor with shape (15, 384, 384).
+        output_path (str): File path to save the visualized image.
+        threshold (float): Minimum value for landmark maximum to draw a circle.
+    """
+    if isinstance(img_tensor, torch.Tensor):
+        img_tensor = img_tensor.numpy()
+    
+    # Ensure tensor shape is (15, H, W)
+    assert img_tensor.shape[0] == 15, "Input tensor must have 15 channels."
+    
+    # Extract the base image and normalize to range [0, 255] for visualization
+    base_image = img_tensor[0]  # First channel
+    base_image = (base_image - base_image.min()) / (base_image.max() - base_image.min()) * 255
+    base_image = base_image.astype(np.uint8)
+    
+    # Create a 3-channel grayscale image
+    grayscale_image = np.stack([base_image] * 3, axis=-1)  # Shape: (H, W, 3)
+    pil_image = Image.fromarray(grayscale_image)
+    draw = ImageDraw.Draw(pil_image)
+    
+    # Iterate through the landmark heatmaps (channels 1 to 14)
+    for channel_idx in range(1, 15):
+        heatmap = img_tensor[channel_idx]
+        metrics = analyze_heatmap(heatmap)
+        print(metrics)
+        if metrics["peak_to_background"] > threshold:
+            # Find the coordinates of the maximum value
+            max_coords = np.unravel_index(np.argmax(heatmap), heatmap.shape)
+            y, x = max_coords  # (row, col) -> (y, x)
+            
+            # Draw a red circle on the image
+            draw.ellipse(
+                [(x - 5, y - 5), (x + 5, y + 5)],
+                outline="red",
+                width=2
+            )
+    
+    # Save the resulting image
+    pil_image.save(output_path)
+    print(f"Visualization saved to {output_path}")
 
 def evaluate_sample_many(
     sample_size,
@@ -55,6 +127,7 @@ def evaluate_sample_many(
         os.makedirs(sample_dir)
 
     num_sampled = 0
+
     # keep sampling images until we have enough
     for bidx, seg_batch in tqdm(enumerate(eval_dataloader), total=len(eval_dataloader)):
         if num_sampled < sample_size:
@@ -64,10 +137,14 @@ def evaluate_sample_many(
                 current_batch_size = config.eval_batch_size
 
             if config.segmentation_guided:
+                #images = pipeline(
+                #    batch_size = current_batch_size,
+                #    seg_batch=seg_batch,
+                #).images
                 images = pipeline(
                     batch_size = current_batch_size,
                     seg_batch=seg_batch,
-                ).images
+                )
             else:
                 images = pipeline(
                     batch_size = current_batch_size,
@@ -75,13 +152,14 @@ def evaluate_sample_many(
 
             # save each image in the list separately
             for i, img in enumerate(images):
+                # img shape is (15, 384, 384)
                 if config.segmentation_guided:
                     # name base on input mask fname
                     img_fname = "{}/condon_{}".format(sample_dir, seg_batch["image_filenames"][i])
                 else:
                     img_fname = f"{sample_dir}/{num_sampled + i:04d}.png"
-                #pdb.set_trace()
-                img.save(img_fname[0:-4] + '.png') #modified this for the 3 channel toy landmark case
+                visualize_landmarks(img, img_fname[0:-4] + '.png', threshold=1.5)
+                #img.save(img_fname[0:-4] + '.png') #modified this for the 3 channel toy landmark case
 
             num_sampled += len(images)
             print("sampled {}/{}.".format(num_sampled, sample_size))
@@ -355,7 +433,6 @@ def add_segmentations_to_noise(noisy_images, segmentations_batch, config, device
     """
     concat segmentations to noisy image
     """
-    #pdb.set_trace()
     if config.segmentation_channel_mode == "single":
         multiclass_masks_shape = (noisy_images.shape[0], 1, noisy_images.shape[2], noisy_images.shape[3])
         segs = convert_segbatch_to_multiclass(multiclass_masks_shape, segmentations_batch, config, device) 
@@ -376,37 +453,71 @@ def evaluate(config, epoch, pipeline, seg_batch=None, class_label_cfg=None, tran
     # The default pipeline output type is `List[PIL.Image]`
 
     if config.segmentation_guided:
+        '''
         images = pipeline(
             batch_size = config.eval_batch_size,
             seg_batch=seg_batch,
             class_label_cfg=class_label_cfg,
             translate=translate
         ).images
+        '''
+        images = pipeline(
+            batch_size = config.eval_batch_size,
+            seg_batch=seg_batch,
+            class_label_cfg=class_label_cfg,
+            translate=translate
+        )
     else:
         images = pipeline(
             batch_size = config.eval_batch_size,
             # TODO: implement CFG and naive conditioning sampling for non-seg-guided pipelines (also needed for translation)
         ).images
 
-    # Make a grid out of the images
-    cols = 4
-    rows = math.ceil(len(images) / cols)
-    image_grid = make_grid(images, rows=rows, cols=cols)
-
     # Save the images
     test_dir = os.path.join(config.output_dir, "samples")
     os.makedirs(test_dir, exist_ok=True)
-    image_grid.save(f"{test_dir}/{epoch:04d}.png")
+
+    # Save the images tensor as a .npy file
+    npy_save_path = os.path.join(config.output_dir, "samples", f"{epoch:04d}_images.npy")
+    np.save(npy_save_path, images)
+
+    # Load the .npy file (if needed)
+    images_loaded = np.load(npy_save_path)
+
+    # Assuming `images_loaded` has the shape (batch_size, channels, height, width)
+    # Extract the first image from the batch
+    image = images_loaded[0]  # Shape: (15, height, width)
+
+    # Extract channels 1, 4, and 5 (convert to 0-indexed: 0, 3, 4)
+    r_channel = image[0]  # Channel 1
+    g_channel = image[3]  # Channel 4
+    b_channel = image[4]  # Channel 5
+
+    # Normalize channels to [0, 255]
+    def normalize_to_uint8(channel):
+        return ((channel - channel.min()) / (channel.max() - channel.min()) * 255).astype(np.uint8)
+
+    r_channel = normalize_to_uint8(r_channel)
+    g_channel = normalize_to_uint8(g_channel)
+    b_channel = normalize_to_uint8(b_channel)
+
+    # Stack channels into an RGB image
+    rgb_image = np.stack([r_channel, g_channel, b_channel], axis=-1)  # Shape: (height, width, 3)
+
+    # Save the RGB image as a PNG
+    rgb_save_path = os.path.join(config.output_dir, "samples", f"{epoch:04d}_rgb.png")
+    Image.fromarray(rgb_image).save(rgb_save_path)
+
 
     # save segmentations we conditioned the samples on
     if config.segmentation_guided:
         for seg_type in seg_batch.keys():
             if seg_type.startswith("seg_"):
-                save_image(seg_batch[seg_type], f"{test_dir}/{epoch:04d}_cond_{seg_type}.png", normalize=True, nrow=cols)
+                save_image(seg_batch[seg_type], f"{test_dir}/{epoch:04d}_cond_{seg_type}.png", normalize=True)
 
         # as well as original images that the segs belong to
-        img_og = seg_batch['images']
-        save_image(img_og, f"{test_dir}/{epoch:04d}_orig.png", normalize=True, nrow=cols)
+        img_og = seg_batch['images'][0][0]
+        save_image(img_og, f"{test_dir}/{epoch:04d}_orig.png", normalize=True)
 
 
 # custom diffusers pipelines for sampling from segmentation-guided models
@@ -846,9 +957,10 @@ class SegGuidedDDIMPipeline(DiffusionPipeline):
             # will output source domain images first, then target domain images
 
         image = (image / 2 + 0.5).clamp(0, 1)
-        image = image.cpu().permute(0, 2, 3, 1).numpy()
-        if output_type == "pil":
-            image = self.numpy_to_pil(image)
+        image = image.cpu().numpy()
+        #if output_type == "pil":
+        #    image = self.numpy_to_pil(image)
+        return image
 
         if not return_dict:
             return (image,)

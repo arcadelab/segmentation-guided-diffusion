@@ -29,7 +29,7 @@ class TrainingConfig:
     gradient_accumulation_steps: int = 1
     learning_rate: float = 2e-5
     lr_warmup_steps: int = 500
-    save_image_epochs: int = 35
+    save_image_epochs: int = 75
     save_model_epochs: int = 30
     mixed_precision: str = 'fp16'  # `no` for float32, `fp16` for automatic mixed precision
     output_dir: str = None
